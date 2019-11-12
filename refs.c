@@ -169,7 +169,7 @@ size_t refs_used() {
 
 /*!
  * You may find this function useful to implement to avoid code duplication
- * between reference counting and swap-and-copy.
+ * between reference counting and stop-and-copy.
  * It calls visitor() on all references referenced by the given value,
  * which performs one level of the reference graph DFS.
  */
