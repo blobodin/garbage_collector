@@ -12,10 +12,12 @@ GENERATED_HEADERS = grammar.l.h grammar.y.h
 OBJS = arena.o ast.o eval.o eval_dict.o eval_list.o eval_refs.o eval_types.o \
 	exception.o grammar.l.o grammar.y.o mm.o parser.o refs.o repl.o
 
-TESTS_1 = algo_csum simple_math simple_print stress_int multiple_refs \
+TESTS_1 = simple_math simple_print algo_fizzbuzz algo_csum algo_join \
+	algo_bubble algo_bubble_str stress_int stress_str multiple_refs \
 	long_chain transpose ordered_fractions # champernowne bouncy_numbers
-TESTS_2 = $(TESTS_1) dict_ops long_chain_dict tree dict_resize
-TESTS_3 = $(TESTS_2) self_cycle long_loops linked_list dense_graph compacting
+TESTS_2 = $(TESTS_1) dict_ops long_chain_dict tree dict_resize stress_struct
+TESTS_3 = $(TESTS_2) self_cycle simple_recursive simple_rep long_loops \
+	linked_list dense_graph compacting
 
 test: test3
 test1: $(TESTS_1:=-result)
