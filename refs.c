@@ -167,17 +167,6 @@ size_t refs_used() {
 //// REFERENCE COUNTING ////
 
 
-/*!
- * You may find this function useful to implement to avoid code duplication
- * between reference counting and stop-and-copy.
- * It calls visitor() on all references referenced by the given value,
- * which performs one level of the reference graph DFS.
- */
-void visit_references(value_t *value, void (*visitor)(reference_t)) {
-    (void) value;
-    (void) visitor;
-}
-
 
 /*! Increases the reference count of the value at the given reference. */
 void incref(reference_t ref) {
