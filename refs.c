@@ -213,7 +213,7 @@ void collect_garbage(void) {
     // END TODO
 
     if (interactive) {
-        // Ths will report how many bytes we were able to free in this garbage
+        // This will report how many bytes we were able to free in this garbage
         // collection pass.
         fprintf(stderr, "Reclaimed %zu bytes of garbage.\n", old_use - mem_used());
     }
