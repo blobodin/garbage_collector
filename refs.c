@@ -27,8 +27,11 @@
  * The start of the allocated memory pool.
  * Stored so that it can be free()d when the interpreter exits.
  */
-static void *pool;
+void *pool;
 
+size_t half_mem_size;
+
+void *to_pool;
 
 /*!
  * This is the "reference table", which maps references to value_t pointers.
@@ -61,7 +64,11 @@ void init_refs(size_t memory_size, void *memory_pool) {
     /* Use the memory pool of the given size.
      * We round the size down to a multiple of ALIGNMENT so that values are aligned.
      */
-    mm_init(memory_size / ALIGNMENT * ALIGNMENT, memory_pool);
+
+    half_mem_size = memory_size / 2;
+    to_pool = memory_pool + half_mem_size;
+
+    mm_init((half_mem_size / ALIGNMENT) * ALIGNMENT, memory_pool);
     pool = memory_pool;
 
     /* Start out with no references in our reference-table. */
@@ -136,7 +143,7 @@ value_t *deref(reference_t ref) {
 
     /* Make sure the reference's value is within the pool!
      * Also ensure that the value is not NULL, indicating an unused reference. */
-    assert(is_pool_address(value));
+    // assert(is_pool_address(value));
 
     return value;
 }
@@ -170,8 +177,8 @@ size_t refs_used() {
 
 /*! Increases the reference count of the value at the given reference. */
 void incref(reference_t ref) {
-    (void) ref;
-    // TODO: Implement reference counting.
+    value_t *val = deref(ref);
+    val->ref_count++;
 }
 
 
@@ -180,16 +187,74 @@ void incref(reference_t ref) {
  * If the reference count reaches 0, the value is definitely garbage and should be freed.
  */
 void decref(reference_t ref) {
-    (void) ref;
-    // TODO: Implement reference counting.
+    if (ref != TOMBSTONE_REF && ref != NULL_REF) {
+        value_t *val = deref(ref);
+        val->ref_count--;
+        if (val->ref_count == 0) {
+            if (val->type == VAL_LIST) {
+                list_value_t *list = (list_value_t *) val;
+                decref(list->values);
+            } else if (val->type == VAL_DICT) {
+                dict_value_t *dict = (dict_value_t *) val;
+                decref(dict->keys);
+                decref(dict->values);
+            } else if (val->type == VAL_REF_ARRAY) {
+                ref_array_value_t *ref_array = (ref_array_value_t *) val;
+                size_t array_size = ref_array->capacity;
+                for (size_t i = 0; i < array_size; i++) {
+                    decref(ref_array->values[i]);
+                }
+            }
+            mm_free(val);
+            ref_table[ref] = NULL;
+        }
+    }
 }
 
 
 //// END REFERENCE COUNTING ////
 
+void clean_cycles() {
+    for (int i = 0; i < num_refs; i++) {
+        if (!is_pool_address(ref_table[i])) {
+            ref_table[i] = NULL;
+        }
+    }
+}
+
+void stop_and_copy(const char *name, reference_t ref) {
+    (void) name;
+
+    if (ref != NULL_REF && ref != TOMBSTONE_REF) {
+        value_t *val = deref(ref);
+        if (val->type != VAL_FREE && !is_pool_address(val)) {
+            val->ref_count = 1;
+            void *ptr = mm_malloc(val->value_size);
+            assert(ptr != NULL);
+            void *new_ptr = memcpy(ptr, (void *) val, val->value_size);
+            ref_table[ref] = new_ptr;
+
+            if (val->type == VAL_LIST) {
+                list_value_t *list = (list_value_t *) val;
+                stop_and_copy(NULL, list->values);
+            } else if (val->type == VAL_DICT) {
+                dict_value_t *dict = (dict_value_t *) val;
+                stop_and_copy(NULL, dict->keys);
+                stop_and_copy(NULL, dict->values);
+            } else if (val->type == VAL_REF_ARRAY) {
+                ref_array_value_t *ref_array = (ref_array_value_t *) val;
+                size_t array_size = ref_array->capacity;
+                for (size_t i = 0; i < array_size; i++) {
+                    stop_and_copy(NULL, ref_array->values[i]);
+                }
+            }
+        } else {
+            val->ref_count++;
+        }
+    }
+}
 
 //// GARBAGE COLLECTOR ////
-
 
 void collect_garbage(void) {
     if (interactive) {
@@ -197,9 +262,14 @@ void collect_garbage(void) {
     }
     size_t old_use = mem_used();
 
-    // TODO:  Implement garbage collection.
-    printf("\nWait, I don't know how to identify or collect garbage.  :(\n\n");
-    // END TODO
+    mm_init((half_mem_size / ALIGNMENT) * ALIGNMENT, to_pool);
+
+    foreach_global(stop_and_copy);
+    clean_cycles();
+
+    void *pool_storage = pool;
+    pool = to_pool;
+    to_pool = pool_storage;
 
     if (interactive) {
         // This will report how many bytes we were able to free in this garbage
@@ -208,9 +278,7 @@ void collect_garbage(void) {
     }
 }
 
-
 //// END GARBAGE COLLECTOR ////
-
 
 /*!
  * Clean up the allocator state.
@@ -218,7 +286,10 @@ void collect_garbage(void) {
  * so that the allocator doesn't leak memory.
  */
 void close_refs(void) {
-    free(pool);
+    if ((size_t) pool < (size_t) to_pool) {
+        mm_free(pool);
+    } else {
+        mm_free(to_pool);
+    }
     free(ref_table);
 }
-

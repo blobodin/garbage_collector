@@ -123,6 +123,7 @@ reference_t dict_subscr_get(value_t *obj, reference_t subscr) {
     int64_t idx = keys_find(keys, hash, subscr, true);
 
     if (idx >= 0 && keys->values[idx] != NULL_REF) {
+        incref(values->values[idx]);
         return values->values[idx];
     } else {
         exception_set(EXC_KEY_ERROR, "no value found for key in dictionary");
@@ -144,6 +145,8 @@ void dict_subscr_set(value_t *obj, reference_t subscr, reference_t value) {
     int64_t idx = keys_find(keys, hash, subscr, true);
     if (idx >= 0 && keys->values[idx] != NULL_REF) {
         /* If the keys match, just overwrite the value. */
+        decref(values->values[idx]);
+        incref(value);
         values->values[idx] = value;
         return;
     }
@@ -159,6 +162,9 @@ void dict_subscr_set(value_t *obj, reference_t subscr, reference_t value) {
 
         keys->values[idx] = subscr;
         values->values[idx] = value;
+
+        incref(subscr);
+        incref(value);
 
         dict_maybe_upsize(dict);
     } else {
@@ -180,6 +186,10 @@ void dict_subscr_del(value_t *obj, reference_t subscr) {
     int64_t idx = keys_find(keys, hash, subscr, true);
     if (idx >= 0 && keys->values[idx] != NULL_REF) {
         dict->size--;
+
+        decref(keys->values[idx]);
+        decref(values->values[idx]);
+
         keys->values[idx] = TOMBSTONE_REF;
         values->values[idx] = NULL_REF;
     } else {
