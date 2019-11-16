@@ -23,14 +23,13 @@
 
 //// MODULE-LOCAL STATE ////
 
-/*!
- * The start of the allocated memory pool.
- * Stored so that it can be free()d when the interpreter exits.
- */
+/* The start of the from pool for stop and copy. */
 void *pool;
 
+/* Half the size of the total memory pool. */
 size_t half_mem_size;
 
+/* The start of the to pool for stop and copy. */
 void *to_pool;
 
 /*!
@@ -65,9 +64,11 @@ void init_refs(size_t memory_size, void *memory_pool) {
      * We round the size down to a multiple of ALIGNMENT so that values are aligned.
      */
 
+    /* Cuts the memory pool in half for the from pool and the to pool. */
     half_mem_size = memory_size / 2;
     to_pool = memory_pool + half_mem_size;
 
+    /* Initializes the first from pool. */
     mm_init((half_mem_size / ALIGNMENT) * ALIGNMENT, memory_pool);
     pool = memory_pool;
 
@@ -170,10 +171,29 @@ size_t refs_used() {
     return values;
 }
 
+/*!
+ * General function that recursivley iterates through all references that a
+ * value is associated with and applies a given function. In this case,
+ * the function f with either be move() or decref().
+ */
+void apply_to_neighbors(void (*f)(reference_t ref), value_t *val) {
+    if (val->type == VAL_LIST) {
+        list_value_t *list = (list_value_t *) val;
+        f(list->values);
+    } else if (val->type == VAL_DICT) {
+        dict_value_t *dict = (dict_value_t *) val;
+        f(dict->keys);
+        f(dict->values);
+    } else if (val->type == VAL_REF_ARRAY) {
+        ref_array_value_t *ref_array = (ref_array_value_t *) val;
+        size_t array_size = ref_array->capacity;
+        for (size_t i = 0; i < array_size; i++) {
+            f(ref_array->values[i]);
+        }
+    }
+}
 
 //// REFERENCE COUNTING ////
-
-
 
 /*! Increases the reference count of the value at the given reference. */
 void incref(reference_t ref) {
@@ -184,27 +204,16 @@ void incref(reference_t ref) {
 
 /*!
  * Decreases the reference count of the value at the given reference.
- * If the reference count reaches 0, the value is definitely garbage and should be freed.
+ * If the reference count reaches 0, the value is definitely
+ * garbage and should be freed. Additionally, all things referenced to
+ * by the value must be decrefed once its freed.
  */
 void decref(reference_t ref) {
     if (ref != TOMBSTONE_REF && ref != NULL_REF) {
         value_t *val = deref(ref);
         val->ref_count--;
         if (val->ref_count == 0) {
-            if (val->type == VAL_LIST) {
-                list_value_t *list = (list_value_t *) val;
-                decref(list->values);
-            } else if (val->type == VAL_DICT) {
-                dict_value_t *dict = (dict_value_t *) val;
-                decref(dict->keys);
-                decref(dict->values);
-            } else if (val->type == VAL_REF_ARRAY) {
-                ref_array_value_t *ref_array = (ref_array_value_t *) val;
-                size_t array_size = ref_array->capacity;
-                for (size_t i = 0; i < array_size; i++) {
-                    decref(ref_array->values[i]);
-                }
-            }
+            apply_to_neighbors(decref, val);
             mm_free(val);
             ref_table[ref] = NULL;
         }
@@ -214,42 +223,49 @@ void decref(reference_t ref) {
 
 //// END REFERENCE COUNTING ////
 
-void clean_cycles() {
-    for (int i = 0; i < num_refs; i++) {
-        if (!is_pool_address(ref_table[i])) {
-            ref_table[i] = NULL;
+/*!
+ * Function for moving references between the from space and to space.
+ * Updates reference table and reference counters accordingly.
+ */
+void move(reference_t ref) {
+    if (ref != NULL_REF && ref != TOMBSTONE_REF) {
+        value_t *val = deref(ref);
+        /* If the value hasn't been moved, move it. */
+        if (!is_pool_address(val)) {
+            /* Reset the reference count. */
+            val->ref_count = 1;
+            /* Get memory in the to space and copy the value over. */
+            void *ptr = mm_malloc(val->value_size);
+            void *new_ptr = memcpy(ptr, (void *) val, val->value_size);
+            /* Update the reference table address. */
+            ref_table[ref] = new_ptr;
+            /* Attempt to recrusively move all neighbors. */
+            apply_to_neighbors(move, val);
+        } else {
+            /* If the value has been moved, increment the reference count. */
+            val->ref_count++;
         }
     }
 }
 
+/*
+ * stop_and_copy's only function is to call move. This is so that move()
+ * and decref() both have the same arguments and can be used by the
+ * general function apply_to_neighbors().
+ */
 void stop_and_copy(const char *name, reference_t ref) {
     (void) name;
+    move(ref);
+}
 
-    if (ref != NULL_REF && ref != TOMBSTONE_REF) {
-        value_t *val = deref(ref);
-        if (val->type != VAL_FREE && !is_pool_address(val)) {
-            val->ref_count = 1;
-            void *ptr = mm_malloc(val->value_size);
-            assert(ptr != NULL);
-            void *new_ptr = memcpy(ptr, (void *) val, val->value_size);
-            ref_table[ref] = new_ptr;
-
-            if (val->type == VAL_LIST) {
-                list_value_t *list = (list_value_t *) val;
-                stop_and_copy(NULL, list->values);
-            } else if (val->type == VAL_DICT) {
-                dict_value_t *dict = (dict_value_t *) val;
-                stop_and_copy(NULL, dict->keys);
-                stop_and_copy(NULL, dict->values);
-            } else if (val->type == VAL_REF_ARRAY) {
-                ref_array_value_t *ref_array = (ref_array_value_t *) val;
-                size_t array_size = ref_array->capacity;
-                for (size_t i = 0; i < array_size; i++) {
-                    stop_and_copy(NULL, ref_array->values[i]);
-                }
-            }
-        } else {
-            val->ref_count++;
+/*!
+ * Iterates through the reference table to collected garbage cycles
+ * that have not been moved to the to_space.
+ */
+void clean_cycles() {
+    for (int i = 0; i < num_refs; i++) {
+        if (!is_pool_address(ref_table[i])) {
+            ref_table[i] = NULL;
         }
     }
 }
@@ -262,18 +278,24 @@ void collect_garbage(void) {
     }
     size_t old_use = mem_used();
 
+    /* Initalizes to_space memory so that it can be malloced */
     mm_init((half_mem_size / ALIGNMENT) * ALIGNMENT, to_pool);
 
+    /* Copies over all values referenced to by global variables. */
     foreach_global(stop_and_copy);
+
+    /* Removes cycles of garbage not caught by reference counting */
     clean_cycles();
 
+    /* Switches from space and to space pointers after all garbage is collected
+       and all used memory is copied over. */
     void *pool_storage = pool;
     pool = to_pool;
     to_pool = pool_storage;
 
     if (interactive) {
-        // This will report how many bytes we were able to free in this garbage
-        // collection pass.
+        /* This will report how many bytes we were able to free in this garbage
+           collection pass. */
         fprintf(stderr, "Reclaimed %zu bytes of garbage.\n", old_use - mem_used());
     }
 }
@@ -286,6 +308,8 @@ void collect_garbage(void) {
  * so that the allocator doesn't leak memory.
  */
 void close_refs(void) {
+    /* Determines which global pointer points to the beginning of the
+       memory pool. */
     if ((size_t) pool < (size_t) to_pool) {
         mm_free(pool);
     } else {

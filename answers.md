@@ -11,7 +11,7 @@ skip it while searching, then we would have to reorder the entries once
 deleting the key.
 
 # Q2
-Free_value_t denotes a block of memory that is not currently allocated.
+Free_value_t denotes a block of memory that is in the free list.
 Since it is not allocated, there will be no references assigned to it.
-The size is still necessary as it is used to determine whether or not the
-block is compatible with a memory request.
+The size is still necessary as it is used by malloc to determine whether or not
+the block should be returned for a memory request.
