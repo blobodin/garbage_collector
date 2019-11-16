@@ -223,6 +223,8 @@ void decref(reference_t ref) {
 
 //// END REFERENCE COUNTING ////
 
+//// GARBAGE COLLECTOR ////
+
 /*!
  * Function for moving references between the from space and to space.
  * Updates reference table and reference counters accordingly.
@@ -269,8 +271,6 @@ void clean_cycles() {
         }
     }
 }
-
-//// GARBAGE COLLECTOR ////
 
 void collect_garbage(void) {
     if (interactive) {
